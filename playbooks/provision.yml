@@ -1,0 +1,166 @@
+---
+- hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+  - name: Replace a localhost entry with our own | {{ inventory_hostname }}
+    lineinfile:
+      path: /etc/hosts
+      regexp: '^127\.0\.0\.1'
+      line: 127.0.0.1 localhost
+      owner: root
+      group: root
+      mode: '0644'
+  - name: Allow password authentication |{{ inventory_hostname }}
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: "^PasswordAuthentication"
+      line: "PasswordAuthentication yes"
+      state: present
+    notify: restart sshd
+  - name: Set authorized key took from file | {{ inventory_hostname }}
+    authorized_key:
+      user: vagrant
+      state: present
+      key: "{{ lookup('file', '/home/vagrant/.ssh/id_rsa.pub') }}"
+  - name: Add IP address of all hosts to all hosts | {{ inventory_hostname }}
+    lineinfile:
+      dest: /etc/hosts
+      regexp: '.*{{ item }}$'
+      line: "{{ hostvars[item].ansible_host }} {{ item }}"
+      state: present
+    when: hostvars[item].ansible_host is defined
+    with_items: "{{ groups.all }}"
+  - name: Copy SSH key
+    ansible.builtin.copy:
+      src: ~/.ssh/id_rsa
+      dest: /home/vagrant/.ssh/id_rsa
+      mode: 0600
+      owner: vagrant
+      group: vagrant
+  - name: Copy SSH config
+    ansible.builtin.copy:
+      src: files/ssh-config
+      dest: /home/vagrant/.ssh/config
+      mode: 0600
+      owner: vagrant
+      group: vagrant
+  - name: Add Docker GPG key  | {{ inventory_hostname }}
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+  - name: Add Hashicorp GPG key | {{ inventory_hostname }}
+    apt_key:
+      url: https://apt.releases.hashicorp.com/gpg
+  - name: Add Docker repository | {{ inventory_hostname }}
+    ansible.builtin.apt_repository:
+      repo: deb [arch=amd64] https://download.docker.com/{{ ansible_system | lower }}/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
+      state: present
+      update_cache: false
+  - name: Add Hashicorp repository | {{ inventory_hostname }}
+    ansible.builtin.apt_repository:
+      repo: deb [arch=amd64] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main
+      state: present
+      update_cache: false
+  - name: Install packages | {{ inventory_hostname }}
+    ansible.builtin.package:
+      name:
+        - docker-ce
+        - docker-ce-cli
+        - nomad
+        - consul
+        - qemu-kvm
+        - qemu
+      state: present
+      update_cache: true
+  - name: hold version | {{ inventory_hostname }}
+    ansible.builtin.dpkg_selections:
+      name: "{{ item }}"
+      selection: hold
+    with_items:
+      - docker-ce
+      - nomad
+      - consul
+  - name: Add vagrant to group Docker | {{ inventory_hostname }}
+    ansible.builtin.user:
+      name: vagrant
+      group: docker
+  - name: Check swap State
+    ansible.builtin.stat:
+      path: /swapfile
+    register: swap_file_check
+  - name: Umount swap | {{ inventory_hostname }}
+    ansible.posix.mount:
+      name: swap
+      fstype: swap
+      state: absent
+    when: swap_file_check.stat.exists
+  - name: Swap Off | {{ inventory_hostname }}
+    ansible.builtin.shell:
+      cmd: swapoff -a
+    when: ansible_swaptotal_mb > 0
+  - name: Install Cloudflare SSL tools
+    ansible.builtin.uri:
+      url: "https://pkg.cfssl.org/R1.2/{{ item }}_linux-amd64"
+      dest: "/usr/local/bin/{{ item }}"
+      mode: 0755
+      status_code: [200, 304]
+    loop:
+      - cfssl
+      - cfssl-certinfo
+      - cfssljson
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: sshd
+        state: restarted
+########################################################################
+# Initiate Nomad Server
+########################################################################
+
+- name: Initiate Nomade Server
+  hosts: node-1
+  gather_facts: true
+  become: true
+  tags: server
+  tasks:
+    - name: Create consul service
+      ansible.builtin.copy:
+        src: files/consul.service
+        dest: /etc/systemd/system/consul.service
+        mode: 0644
+    - name: Start service consul
+      ansible.builtin.service:
+        name: consul
+        state: started
+        enabled: true
+    - name: Create nomad config
+      ansible.builtin.copy:
+        src: files/nomad.hcl-master
+        dest: /etc/nomad.d/nomad.hcl
+        mode: 0644
+    - name: Start service nomad
+      ansible.builtin.service:
+        name: nomad
+        state: restarted
+        enabled: true
+########################################################################
+# Join Node to Nomad Server
+########################################################################
+
+- name: Initiate Nomade Node
+  hosts: node-2
+  gather_facts: true
+  become: true
+  tags: node
+  tasks:
+    - name: Create nomad config
+      ansible.builtin.copy:
+        src: files/nomad.hcl-worker
+        dest: /etc/nomad.d/nomad.hcl
+        mode: 0644
+    - name: Start service nomad
+      ansible.builtin.service:
+        name: nomad
+        state: restarted
+        enabled: true

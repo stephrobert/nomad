@@ -1,0 +1,11 @@
+data_dir = "/opt/nomad/data"
+datacenter = "dc1"
+
+server {
+  enabled = true
+  bootstrap_expect = 1
+}
+
+client {
+  enabled = true
+}
