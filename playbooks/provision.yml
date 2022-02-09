@@ -1,5 +1,5 @@
 ---
-- hosts: all
+- hosts: nomad
   gather_facts: true
   become: true
   tasks:
@@ -45,6 +45,20 @@
       mode: 0600
       owner: vagrant
       group: vagrant
+  - name: Check swap State
+    ansible.builtin.stat:
+      path: /swapfile
+    register: swap_file_check
+  - name: Umount swap | {{ inventory_hostname }}
+    ansible.posix.mount:
+      name: swap
+      fstype: swap
+      state: absent
+    when: swap_file_check.stat.exists
+  - name: Swap Off | {{ inventory_hostname }}
+    ansible.builtin.shell:
+      cmd: swapoff -a
+    when: ansible_swaptotal_mb > 0
   - name: Add Docker GPG key  | {{ inventory_hostname }}
     apt_key:
       url: https://download.docker.com/linux/ubuntu/gpg
@@ -84,20 +98,6 @@
     ansible.builtin.user:
       name: vagrant
       group: docker
-  - name: Check swap State
-    ansible.builtin.stat:
-      path: /swapfile
-    register: swap_file_check
-  - name: Umount swap | {{ inventory_hostname }}
-    ansible.posix.mount:
-      name: swap
-      fstype: swap
-      state: absent
-    when: swap_file_check.stat.exists
-  - name: Swap Off | {{ inventory_hostname }}
-    ansible.builtin.shell:
-      cmd: swapoff -a
-    when: ansible_swaptotal_mb > 0
   - name: Install Cloudflare SSL tools
     ansible.builtin.uri:
       url: "https://pkg.cfssl.org/R1.2/{{ item }}_linux-amd64"
@@ -119,7 +119,7 @@
 ########################################################################
 
 - name: Initiate Nomade Server
-  hosts: node-1
+  hosts: master
   gather_facts: true
   become: true
   tags: server
@@ -149,7 +149,7 @@
 ########################################################################
 
 - name: Initiate Nomade Node
-  hosts: node-2
+  hosts: workers
   gather_facts: true
   become: true
   tags: node
